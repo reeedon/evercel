@@ -1,0 +1,122 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EV Charging Queue — Hybrid (Vercel + Neon)</title>
+  <style>
+    :root { --bg:#f6f7fb; --border:#d0d7de; --text:#1f2328; --muted:#57606a; --success-bg:#dff6dd; --success-border:#73be6f; --danger-bg:#fde7e9; --danger-border:#e83d3d; --accent:#2563eb; }
+    *{box-sizing:border-box} html,body{height:100%} body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji";color:var(--text);background:var(--bg)}
+    header{display:flex;align-items:baseline;gap:1rem;padding:1rem 1.25rem;border-bottom:1px solid var(--border);background:#fff;position:sticky;top:0;z-index:10}
+    header h1{font-size:1.25rem;margin:0} header .meta{color:var(--muted);font-size:.95rem} header .actions{margin-left:auto;display:flex;gap:.5rem}
+    button,select,input[type="text"]{font:inherit;padding:.5rem .6rem;border:1px solid var(--border);border-radius:.5rem;background:#fff}
+    button{cursor:pointer;background:var(--accent);color:#fff;border-color:var(--accent)} button.secondary{background:#fff;color:var(--text);border-color:var(--border)}
+    main{display:grid;grid-template-columns:1.1fr 1fr 1.2fr;gap:1rem;padding:1rem}
+    .panel{background:#fff;border:1px solid var(--border);border-radius:.75rem;padding:1rem} .panel h2{margin:0 0 .75rem 0;font-size:1.05rem}
+    #userForm{display:grid;grid-template-columns:1fr 160px auto;gap:.5rem} #usersList,#queueList{margin-top:.75rem;display:flex;flex-direction:column;gap:.5rem;min-height:200px;padding:.5rem;border:1px dashed var(--border);border-radius:.5rem;background:#fff}
+    .user-item,.queue-item{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.5rem .6rem;border:1px solid var(--border);border-radius:.5rem;background:#fafafa}
+    .user-item[draggable="true"],.queue-item[draggable="true"]{cursor:grab} .name{font-weight:600} .pref{color:var(--muted);font-size:.9rem}
+    .drop-hint{color:var(--muted);text-align:center;font-size:.9rem}
+    .chargers{display:grid;grid-template-columns:1fr 1fr;gap:.75rem}
+    .spot{border:2px solid var(--success-border);border-radius:.75rem;padding:.75rem;min-height:120px;display:grid;grid-template-rows:auto 1fr auto;gap:.35rem;transition:background .2s ease,border-color .2s ease}
+    .spot.free{background:var(--success-bg);border-color:var(--success-border)} .spot.occupied{background:var(--danger-bg);border-color:var(--danger-border)}
+    .spot .title{font-weight:700} .spot .occupant{display:flex;align-items:center;gap:.5rem} .spot .occupant .badge{border:1px solid var(--border);padding:.1rem .4rem;border-radius:.4rem;font-size:.85rem}
+    .spot .controls{display:flex;gap:.5rem}
+    @media (max-width:900px){main{grid-template-columns:1fr}.chargers{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>EV Charging Queue</h1>
+    <div class="meta" id="resetInfo">Daily reset at <strong id="resetLabel">--:--</strong></div>
+    <div class="actions">
+      <button class="secondary" id="resetNow">Reset Now (server)</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel" id="usersPanel">
+      <h2>Users (cloud)</h2>
+      <form id="userForm">
+        <input type="text" id="userName" placeholder="Full name" autocomplete="off" />
+        <select id="userPref" title="Charging preference">
+          <option value="both">Both</option>
+          <option value="tesla">Tesla only</option>
+          <option value="chargepoint">ChargePoint only</option>
+        </select>
+        <button type="submit">Add</button>
+      </form>
+      <div class="drop-hint">Drag a user from here into the Queue</div>
+      <div id="usersList"></div>
+    </section>
+
+    <section class="panel" id="chargersPanel">
+      <h2>Chargers</h2>
+      <div class="chargers" id="chargersGrid"></div>
+    </section>
+
+    <section class="panel" id="queuePanel">
+      <div class="queue-header">
+        <h2>Queue (cloud)</h2>
+        <div class="queue-actions">
+          <button class="secondary" id="clearQueue">Clear Queue</button>
+        </div>
+      </div>
+      <div class="drop-hint">Drop users here to join the queue (top = first)</div>
+      <div id="queueList"></div>
+    </section>
+
+    <section class="panel" id="settingsPanel">
+      <h2>Reset Settings</h2>
+      <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+        <label>Reset time (HH:MM): <input type="text" id="resetTime" placeholder="06:00" style="width:100px" /></label>
+        <button class="secondary" id="saveSettings">Save</button>
+        <span id="saveStatus" style="color:var(--muted)"></span>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const API = { users:'/api/users', state:'/api/state', settings:'/api/settings', resetNow:'/api/state/reset' };
+    let users = []; let state = { queue:[], spots:[], lastReset:null, version:null }; let settings = { resetTime:'06:00' };
+    const DEFAULT_SPOTS = [
+      { id:'tesla-1', type:'tesla', label:'Tesla #1', userId:null },
+      { id:'tesla-2', type:'tesla', label:'Tesla #2', userId:null },
+      { id:'chargepoint-1', type:'chargepoint', label:'ChargePoint #1', userId:null },
+      { id:'chargepoint-2', type:'chargepoint', label:'ChargePoint #2', userId:null }
+    ];
+    function typeEmoji(t){return t==='tesla'?'\uD83D\uDE98':'⚡'}
+    function prefLabel(p){return p==='tesla'?'Tesla only':(p==='chargepoint'?'ChargePoint only':'Both')}
+    function eligibleForType(p,t){return p==='both'||p===t}
+    function userById(id){return users.find(u=>u.id===id)}
+    function userIsInQueue(id){return state.queue.some(q=>q.userId===id)}
+    function userIsCharging(id){return state.spots.some(s=>s.userId===id)}
+
+    async function fetchUsers(){ try{ const r=await fetch(API.users); if(!r.ok) throw 0; users=await r.json(); }catch{ users=[] } renderUsers() }
+    async function createUser(name,pref){ const r=await fetch(API.users,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,pref})}); if(!r.ok){ alert('Add user failed'); return; } const u=await r.json(); users.push(u); renderUsers(); }
+    async function deleteUser(id){ const r=await fetch(`${API.users}/${id}`,{method:'DELETE'}); if(!r.ok){ alert('Remove failed'); return; } users=users.filter(u=>u.id!==id); state.queue=state.queue.filter(q=>q.userId!==id); state.spots.forEach(s=>{if(s.userId===id)s.userId=null}); renderAll(); }
+
+    async function fetchSettings(){ try{ const r=await fetch(API.settings); if(r.ok) settings=await r.json(); }catch{} document.getElementById('resetTime').value=settings.resetTime||'06:00'; updateResetHeader(); }
+    async function saveSettings(){ const t=(document.getElementById('resetTime').value||'').trim(); const r=await fetch(API.settings,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({resetTime:t})}); document.getElementById('saveStatus').textContent=r.ok?'Saved ✓':'Save failed'; if(r.ok){ settings=await r.json(); updateResetHeader(); } }
+
+    async function fetchState(){ try{ const r=await fetch(API.state,{headers:{'Accept':'application/json'}}); if(!r.ok) throw 0; const etag=r.headers.get('ETag'); const b=await r.json(); const sArr=Array.isArray(b.spots)?b.spots:[]; state.queue=(Array.isArray(b.queue)?b.queue.map((row,idx)=>({ userId: row.user_id })) : []); state.spots=sArr.length?sArr.map(row=>({ id:row.id,type:row.type,label:row.label,userId:row.user_id })) : DEFAULT_SPOTS; state.lastReset=b.lastReset||null; state.version=etag; }catch{ state.queue=[]; state.spots=DEFAULT_SPOTS; state.lastReset=null; state.version=null; } renderQueue(); renderSpots(); }
+    async function saveState(apply){ const prev=JSON.parse(JSON.stringify(state)); apply(state); const payload={ queue: state.queue.map((e,i)=>({ position:i, user_id:e.userId })), spots: state.spots.map(s=>({ id:s.id, user_id:s.userId })) };
+      const r=await fetch(API.state,{method:'PUT',headers:{'Content-Type':'application/json','If-Match':state.version||'*'},body:JSON.stringify(payload)}); if(r.status===412){ alert('Another change occurred. Refreshing…'); await fetchState(); return false; } if(!r.ok){ alert('Save failed'); state=prev; return false; } const etag=r.headers.get('ETag'); const b=await r.json(); state.queue=(Array.isArray(b.queue)?b.queue.map((row)=>({ userId: row.user_id })) : state.queue); state.spots=(Array.isArray(b.spots)?b.spots.map(row=>({ id:row.id,type:row.type,label:row.label,userId:row.user_id })) : state.spots); state.lastReset=b.lastReset||state.lastReset; state.version=etag; renderQueue(); renderSpots(); return true; }
+
+    function renderUsers(){ const list=document.getElementById('usersList'); list.innerHTML=''; users.forEach(u=>{ const el=document.createElement('div'); el.className='user-item'; el.draggable=true; el.dataset.userId=u.id; el.innerHTML=`<span class="name">${u.name}</span><span class="pref">${prefLabel(u.pref)}</span><div style="display:flex;gap:.25rem"><button class="secondary" data-action="remove">Remove</button></div>`; el.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',JSON.stringify({kind:'user',userId:u.id}));e.dataTransfer.effectAllowed='copy'}); el.querySelector('[data-action="remove"]').addEventListener('click',async()=>{ if(userIsCharging(u.id)){alert('This user is currently charging. End the session first.');return;} if(!confirm(`Remove ${u.name}?`))return; await deleteUser(u.id); }); list.appendChild(el); }); }
+    function renderQueue(){ const list=document.getElementById('queueList'); list.innerHTML=''; state.queue.forEach((entry,idx)=>{ const u=userById(entry.userId); if(!u) return; const el=document.createElement('div'); el.className='queue-item'; el.draggable=true; el.dataset.userId=u.id; el.innerHTML=`<div style=\"display:flex;align-items:center;gap:.5rem\"><span class=\"badge\">#${idx+1}</span><span class=\"name\">${u.name}</span><span class=\"pref\">${prefLabel(u.pref)}</span></div><div style=\"display:flex;gap:.25rem\"><button class=\"secondary\" data-action=\"moveUp\">↑</button><button class=\"secondary\" data-action=\"moveDown\">↓</button><button class=\"secondary\" data-action=\"remove\">Remove</button></div>`; el.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',JSON.stringify({kind:'queue',userId:u.id}));e.dataTransfer.effectAllowed='move'}); el.addEventListener('dragover',ev=>ev.preventDefault()); el.addEventListener('drop',async ev=>{ev.preventDefault(); try{ const p=JSON.parse(ev.dataTransfer.getData('text/plain')); if(p.kind==='queue'){ const fromIdx=state.queue.findIndex(q=>q.userId===parseInt(p.userId,10)); if(fromIdx>=0 && fromIdx!==idx){ await saveState(s=>{ const [moved]=s.queue.splice(fromIdx,1); s.queue.splice(idx,0,moved); }); } } }catch{} }); el.querySelector('[data-action="remove"]').addEventListener('click',()=>saveState(s=>{ s.queue = s.queue.filter(q=>q.userId!==u.id); })); el.querySelector('[data-action="moveUp"]').addEventListener('click',()=>saveState(s=>{ const i=s.queue.findIndex(q=>q.userId===u.id); if(i>0){ const [e]=s.queue.splice(i,1); s.queue.splice(i-1,0,e);} })); el.querySelector('[data-action="moveDown"]').addEventListener('click',()=>saveState(s=>{ const i=s.queue.findIndex(q=>q.userId===u.id); if(i>=0 && i<s.queue.length-1){ const [e]=s.queue.splice(i,1); s.queue.splice(i+1,0,e);} })); list.appendChild(el); }); list.addEventListener('dragover',e=>e.preventDefault()); list.addEventListener('drop',async e=>{ e.preventDefault(); try{ const p=JSON.parse(e.dataTransfer.getData('text/plain')); if(p.kind==='user'){ addToQueue(parseInt(p.userId,10)); } }catch{} }); const first=list.querySelector('.queue-item'); if(first) first.setAttribute('tabindex','0'); }
+    function renderSpots(){ const grid=document.getElementById('chargersGrid'); grid.innerHTML=''; const spots=(Array.isArray(state.spots)&&state.spots.length)?state.spots:DEFAULT_SPOTS; spots.forEach(s=>{ const u=s.userId?userById(s.userId):null; const el=document.createElement('div'); el.className='spot '+(u?'occupied':'free'); el.dataset.spotId=s.id; el.innerHTML=`<div class=\"title\">${typeEmoji(s.type)} ${s.label}</div><div class=\"occupant\">${u?`<span class=\\"name\\">${u.name}</span><span class=\\"badge\\">${prefLabel(u.pref)}</span>`:'<em>Free</em>'}</div><div class=\"controls\">${u?'<button data-action=\"end\">End Session</button>':''}</div>`; if(u){ el.querySelector('[data-action="end"]').addEventListener('click',()=>endSession(s.id)); } grid.appendChild(el); }); }
+    function renderAll(){ renderUsers(); renderQueue(); renderSpots(); }
+
+    async function addToQueue(userId){ if(userIsCharging(userId)){alert('This user is already on a charger.');return;} if(userIsInQueue(userId)){alert('This user is already in the queue.');return;} const ok=await saveState(s=>{s.queue.push({userId})}); if(ok) fillAvailableSpots(); }
+    async function endSession(spotId){ const ok=await saveState(s=>{ const spot=s.spots.find(x=>x.id===spotId); if(spot) spot.userId=null; }); if(ok) fillAvailableSpots(); }
+    async function fillAvailableSpots(){ await saveState(s=>{ const free=s.spots.filter(sp=>!sp.userId); free.forEach(sp=>{ const idx=s.queue.findIndex(q=>{ const u=userById(q.userId); return u && eligibleForType(u.pref, sp.type); }); if(idx>=0){ const entry=s.queue.splice(idx,1)[0]; sp.userId=entry.userId; } }); }); }
+
+    function updateResetHeader(){ const t=settings.resetTime||'06:00'; const [hh,mm]=t.split(':').map(x=>parseInt(x,10)); const ampm=hh>=12?'PM':'AM'; const displayH=((hh+11)%12)+1; document.getElementById('resetLabel').textContent=`${displayH}:${String(mm).padStart(2,'0')} ${ampm}`; }
+    function startCountdown(){ function nextReset(){ const t=settings.resetTime||'06:00'; const [hh,mm]=t.split(':').map(x=>parseInt(x,10)); const now=new Date(); let next=new Date(now.getFullYear(),now.getMonth(),now.getDate(),hh,mm,0,0); if(now>=next){ next=new Date(now.getFullYear(),now.getMonth(),now.getDate()+1,hh,mm,0,0);} return next; } function tick(){ const next=nextReset(); const now=new Date(); const diff=Math.max(next-now,0); const h=Math.floor(diff/3600000), m=Math.floor((diff%3600000)/60000); document.getElementById('resetInfo').innerHTML=`Daily reset at <strong id=\"resetLabel\">${document.getElementById('resetLabel').textContent}</strong> · Next in ${h}h ${m}m`; } tick(); setInterval(tick,30000); }
+
+    document.addEventListener('DOMContentLoaded', async ()=>{ try{ await Promise.all([fetchSettings(), fetchUsers(), fetchState()]); renderAll(); startCountdown(); }catch{ renderAll(); } document.getElementById('userForm').addEventListener('submit', async e=>{ e.preventDefault(); let name=(document.getElementById('userName').value||'').trim().replace(/\s+/g,' '); const pref=document.getElementById('userPref').value; if(!name){alert('Please enter a name.');return;} if(users.some(u=>u.name.toLowerCase()===name.toLowerCase())){alert('User already exists.');return;} await createUser(name,pref); document.getElementById('userName').value=''; document.getElementById('userPref').value='both'; }); document.getElementById('clearQueue').addEventListener('click',()=>{ if(!state.queue.length) return; if(confirm('Clear the entire queue?')) saveState(s=>{ s.queue=[]; }); }); document.getElementById('resetNow').addEventListener('click', async ()=>{ const r=await fetch(API.resetNow,{method:'POST'}); if(r.ok){ await fetchState(); alert('Server reset done.'); } else { alert('Server reset failed.'); } }); document.getElementById('saveSettings').addEventListener('click', saveSettings); });
+  </script>
+</body>
+</html>

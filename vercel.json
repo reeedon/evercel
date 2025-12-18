@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "index.html",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "api/*.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/users",
+      "dest": "/api/users.js"
+    },
+    {
+      "src": "/api/state",
+      "dest": "/api/state.js"
+    },
+    {
+      "src": "/api/settings",
+      "dest": "/api/settings.js"
+    },
+    {
+      "src": "/api/state/reset",
+      "dest": "/api/reset-timer.js"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/reset-timer",
+      "schedule": "0 6 * * *"
+    }
+  ]
+}

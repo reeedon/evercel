@@ -1,0 +1,11 @@
+{
+  "name": "ev-charging-queue-vercel-neon",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "EV Charging Queue hybrid app on Vercel with Neon Postgres",
+  "license": "MIT",
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.2"
+  }
+}
