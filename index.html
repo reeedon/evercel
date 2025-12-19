@@ -95,7 +95,38 @@
 
     async function fetchUsers(){ try{ const r=await fetch(API.users); if(!r.ok) throw 0; users=await r.json(); }catch{ users=[] } renderUsers() }
     async function createUser(name,pref){ const r=await fetch(API.users,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,pref})}); if(!r.ok){ alert('Add user failed'); return; } const u=await r.json(); users.push(u); renderUsers(); }
-    async function deleteUser(id){ const r=await fetch(`${API.users}/${id}`,{method:'DELETE'}); if(!r.ok){ alert('Remove failed'); return; } users=users.filter(u=>u.id!==id); state.queue=state.queue.filter(q=>q.userId!==id); state.spots.forEach(s=>{if(s.userId===id)s.userId=null}); renderAll(); }
+    
+
+ 
+  async function deleteUser(id) {
+    try {
+      const res = await fetch(`${API.users}?id=${id}`, { method: 'DELETE' });
+
+      if (!res.ok) {
+        // Friendly messages based on status
+        if (res.status === 404) {
+          alert('User not found.');
+        } else {
+          alert('Remove failed.');
+        }
+        return;
+      }
+
+      // Update local data model after successful remove (204 No Content)
+      users = users.filter(u => u.id !== id);
+      state.queue = state.queue.filter(q => q.userId !== id);
+      state.spots.forEach(s => { if (s.userId === id) s.userId = null; });
+
+      // Re-render the UI
+      renderAll();
+    } catch (err) {
+      console.error('Delete user error:', err);
+      alert('Remove failed.');
+    }
+  }
+
+
+
 
     async function fetchSettings(){ try{ const r=await fetch(API.settings); if(r.ok) settings=await r.json(); }catch{} document.getElementById('resetTime').value=settings.resetTime||'06:00'; updateResetHeader(); }
     async function saveSettings(){ const t=(document.getElementById('resetTime').value||'').trim(); const r=await fetch(API.settings,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({resetTime:t})}); document.getElementById('saveStatus').textContent=r.ok?'Saved ✓':'Save failed'; if(r.ok){ settings=await r.json(); updateResetHeader(); } }
