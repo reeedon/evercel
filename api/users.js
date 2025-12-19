@@ -21,19 +21,26 @@ export default async function handler(req, res) {
       return res.status(200).json(rows);
     }
 
-    if (req.method === 'POST') {
-      // Safe JSON parsing fallback (in case req.body wasn't parsed)
-      let body = req.body;
-      if (!body) {
-        try { body = JSON.parse(req.rawBody?.toString() || '{}'); }
-        catch { body = {}; }
-      }
-      const { name: rawName, pref = 'both' } = body;
-      const name = String(rawName || '').trim().replace(/\s+/g, ' ');
-      if (!name) return res.status(400).json({ error: 'Name required' });
-      if (!['both','tesla','chargepoint'].includes(pref)) {
-        return res.status(400).json({ error: 'Invalid pref' });
-      }
+   
+// DELETE: remove user by id and scrub references from queue/spots
+if (req.method === 'DELETE') {
+  const idStr = (req.query?.id || req.url.split('/').pop());
+  const id = parseInt(idStr, 10);
+  if (!id) return res.status(400).json({ error: 'Invalid id' });
+
+  // 1) Remove from queue
+  await sql`DELETE FROM queue WHERE user_id=${id}`;
+
+  // 2) Free any charger assignments
+  await sql`UPDATE spots SET user_id=NULL WHERE user_id=${id}`;
+
+  // 3) Delete the user
+  const del = await sql`DELETE FROM users WHERE id=${id}`;
+  if (del.count === 0) return res.status(404).json({ error: 'Not found' });
+
+  return res.status(204).end();
+}
+
 
       try {
         const inserted =
