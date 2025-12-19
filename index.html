@@ -117,6 +117,65 @@
     function startCountdown(){ function nextReset(){ const t=settings.resetTime||'06:00'; const [hh,mm]=t.split(':').map(x=>parseInt(x,10)); const now=new Date(); let next=new Date(now.getFullYear(),now.getMonth(),now.getDate(),hh,mm,0,0); if(now>=next){ next=new Date(now.getFullYear(),now.getMonth(),now.getDate()+1,hh,mm,0,0);} return next; } function tick(){ const next=nextReset(); const now=new Date(); const diff=Math.max(next-now,0); const h=Math.floor(diff/3600000), m=Math.floor((diff%3600000)/60000); document.getElementById('resetInfo').innerHTML=`Daily reset at <strong id=\"resetLabel\">${document.getElementById('resetLabel').textContent}</strong> · Next in ${h}h ${m}m`; } tick(); setInterval(tick,30000); }
 
     document.addEventListener('DOMContentLoaded', async ()=>{ try{ await Promise.all([fetchSettings(), fetchUsers(), fetchState()]); renderAll(); startCountdown(); }catch{ renderAll(); } document.getElementById('userForm').addEventListener('submit', async e=>{ e.preventDefault(); let name=(document.getElementById('userName').value||'').trim().replace(/\s+/g,' '); const pref=document.getElementById('userPref').value; if(!name){alert('Please enter a name.');return;} if(users.some(u=>u.name.toLowerCase()===name.toLowerCase())){alert('User already exists.');return;} await createUser(name,pref); document.getElementById('userName').value=''; document.getElementById('userPref').value='both'; }); document.getElementById('clearQueue').addEventListener('click',()=>{ if(!state.queue.length) return; if(confirm('Clear the entire queue?')) saveState(s=>{ s.queue=[]; }); }); document.getElementById('resetNow').addEventListener('click', async ()=>{ const r=await fetch(API.resetNow,{method:'POST'}); if(r.ok){ await fetchState(); alert('Server reset done.'); } else { alert('Server reset failed.'); } }); document.getElementById('saveSettings').addEventListener('click', saveSettings); });
+  
+
+  // Optional guard to prevent duplicate adds during a single drop turn
+  let isAddingToQueue = false;
+
+  // Attach the queue list-level DnD listeners ONCE
+  function attachQueueDnDListenersOnce() {
+    const list = document.getElementById('queueList');
+    if (!list) return;
+
+    // Prevent attaching more than once
+    if (list.dataset.listenersAttached === 'true') return;
+
+    list.addEventListener('dragover', e => e.preventDefault());
+
+    list.addEventListener('drop', async e => {
+      e.preventDefault();
+      try {
+        const raw = e.dataTransfer.getData('text/plain');
+        if (!raw) return;
+        const p = JSON.parse(raw);
+
+        if (p.kind === 'user') {
+          // guard for burst duplicates
+          if (isAddingToQueue) return;
+          isAddingToQueue = true;
+
+          await addToQueue(parseInt(p.userId, 10));
+
+          // release guard
+          setTimeout(() => { isAddingToQueue = false; }, 0);
+        }
+      } catch (err) {
+        console.error('Queue drop parse error:', err);
+      }
+    });
+
+    // Mark as attached
+    list.dataset.listenersAttached = 'true';
+  }
+
+  // Call it ONCE during page init
+  document.addEventListener('DOMContentLoaded', async () => {
+    try {
+      await Promise.all([fetchSettings(), fetchUsers(), fetchState()]);
+      renderAll();
+      startCountdown();
+    } catch (err) {
+      console.error(err);
+      renderAll();
+    }
+
+    // 🔧 Attach list-level listeners once
+    attachQueueDnDListenersOnce();
+
+    // … your other init handlers (form submit, clearQueue, resetNow, saveSettings) …
+  });
+
+
   </script>
 </body>
 </html>
